@@ -20,6 +20,7 @@ import Data.ByteString
     isPrefixOf,
     isSuffixOf,
   )
+import Data.ByteString as B (readFile)
 import Data.List (find)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
@@ -175,16 +176,18 @@ testSSL :: TestTree
 testSSL =
   csTest' "request/response using SSL" client server
   where
-    clientConf =
-      stdClientConf
-        { clientSSLConfig =
-            Just
-              ( ClientSSLConfig
-                  (Just "tests/ssl/localhost.crt")
-                  Nothing
-                  Nothing
-              )
-        }
+    clientConf = do
+      crt <- B.readFile "tests/ssl/localhost.crt"
+      return
+        stdClientConf
+          { clientSSLConfig =
+              Just
+                ( ClientSSLConfig
+                    (Just crt)
+                    Nothing
+                    Nothing
+                )
+          }
     client = TestClient clientConf $ \c -> do
       rm <- clientRegisterMethodNormal c "/foo"
       clientRequest c rm 10 "hi" mempty >>= do
@@ -219,16 +222,18 @@ testServerAuthProcessorCancel :: TestTree
 testServerAuthProcessorCancel =
   csTest' "request rejection by auth processor" client server
   where
-    clientConf =
-      stdClientConf
-        { clientSSLConfig =
-            Just
-              ( ClientSSLConfig
-                  (Just "tests/ssl/localhost.crt")
-                  Nothing
-                  Nothing
-              )
-        }
+    clientConf = do
+      crt <- B.readFile "tests/ssl/localhost.crt"
+      return
+        stdClientConf
+          { clientSSLConfig =
+              Just
+                ( ClientSSLConfig
+                    (Just crt)
+                    Nothing
+                    Nothing
+                )
+          }
     client = TestClient clientConf $ \c -> do
       rm <- clientRegisterMethodNormal c "/foo"
       r <- clientRequest c rm 10 "hi" mempty
@@ -277,16 +282,18 @@ testAuthMetadataTransfer =
       let addedProp = find ((== "foo1") . authPropName) newProps
       addedProp @?= Just (AuthProperty "foo1" "bar1")
       return $ ClientMetadataCreateResult [("foo", "bar")] StatusOk ""
-    clientConf =
-      stdClientConf
-        { clientSSLConfig =
-            Just
-              ( ClientSSLConfig
-                  (Just "tests/ssl/localhost.crt")
-                  Nothing
-                  (Just plugin)
-              )
-        }
+    clientConf = do
+      crt <- B.readFile "tests/ssl/localhost.crt"
+      return
+        stdClientConf
+          { clientSSLConfig =
+              Just
+                ( ClientSSLConfig
+                    (Just crt)
+                    Nothing
+                    (Just plugin)
+                )
+          }
     client = TestClient clientConf $ \c -> do
       rm <- clientRegisterMethodNormal c "/foo"
       clientRequest c rm 10 "hi" mempty >>= do
@@ -336,19 +343,20 @@ testAuthMetadataPropagate = testCase "auth metadata inherited by children" $ do
   where
     clientPlugin _ =
       return $ ClientMetadataCreateResult [("foo", "bar")] StatusOk ""
-    clientConf =
+    clientConf crt =
       stdClientConf
         { clientSSLConfig =
             Just
               ( ClientSSLConfig
-                  (Just "tests/ssl/localhost.crt")
+                  (Just crt)
                   Nothing
                   (Just clientPlugin)
               )
         }
     client = do
       threadDelaySecs 3
-      withGRPC $ \g -> withClient g clientConf $ \c -> do
+      crt <- B.readFile "tests/ssl/localhost.crt"
+      withGRPC $ \g -> withClient g (clientConf crt) $ \c -> do
         rm <- clientRegisterMethodNormal c "/foo"
         clientRequest c rm 10 "hi" mempty >>= do
           checkReqRslt $ \NormalRequestResult {..} -> do
@@ -373,12 +381,12 @@ testAuthMetadataPropagate = testCase "auth metadata inherited by children" $ do
         }
     server1ClientPlugin _ =
       return $ ClientMetadataCreateResult [("foo1", "bar1")] StatusOk ""
-    server1ClientConf =
+    server1ClientConf crt =
       stdClientConf
         { clientSSLConfig =
             Just
               ( ClientSSLConfig
-                  (Just "tests/ssl/localhost.crt")
+                  (Just crt)
                   Nothing
                   (Just server1ClientPlugin)
               ),
@@ -386,8 +394,9 @@ testAuthMetadataPropagate = testCase "auth metadata inherited by children" $ do
         }
     server = do
       threadDelaySecs 2
+      crt <- B.readFile "tests/ssl/localhost.crt"
       withGRPC $ \g -> withServer g server1ServerConf $ \s ->
-        withClient g server1ClientConf $ \c -> do
+        withClient g (server1ClientConf crt) $ \c -> do
           let rm = head (normalMethods s)
           serverHandleNormalCall s rm mempty $ \call -> do
             rmc <- clientRegisterMethodNormal c "/foo"
@@ -704,7 +713,7 @@ testCustomUserAgent =
   where
     clientArgs = [UserAgentPrefix "prefix!", UserAgentSuffix "suffix!"]
     client =
-      TestClient (ClientConfig "localhost" 50051 clientArgs Nothing Nothing) $
+      TestClient (pure $ ClientConfig "localhost" 50051 clientArgs Nothing Nothing) $
         \c -> do
           rm <- clientRegisterMethodNormal c "/foo"
           void $ clientRequest c rm 4 "" mempty
@@ -726,12 +735,13 @@ testClientCompression =
   where
     client =
       TestClient
-        ( ClientConfig
-            "localhost"
-            50051
-            [CompressionAlgArg GrpcCompressDeflate]
-            Nothing
-            Nothing
+        ( pure $
+            ClientConfig
+              "localhost"
+              50051
+              [CompressionAlgArg GrpcCompressDeflate]
+              Nothing
+              Nothing
         )
         $ \c -> do
           rm <- clientRegisterMethodNormal c "/foo"
@@ -754,7 +764,7 @@ testClientServerCompression =
         [CompressionAlgArg GrpcCompressDeflate]
         Nothing
         Nothing
-    client = TestClient cconf $ \c -> do
+    client = TestClient (pure cconf) $ \c -> do
       rm <- clientRegisterMethodNormal c "/foo"
       clientRequest c rm 1 "hello" mempty >>= do
         checkReqRslt $ \NormalRequestResult {..} -> do
@@ -792,7 +802,7 @@ testClientServerCompressionLvl =
         [CompressionLevelArg GrpcCompressLevelHigh]
         Nothing
         Nothing
-    client = TestClient cconf $ \c -> do
+    client = TestClient (pure cconf) $ \c -> do
       rm <- clientRegisterMethodNormal c "/foo"
       clientRequest c rm 1 "hello" mempty >>= do
         checkReqRslt $ \NormalRequestResult {..} -> do
@@ -834,7 +844,7 @@ testClientMaxReceiveMessageLengthChannelArg = do
       void $ serverHandleNormalCall s rm mempty $ \sc -> do
         payload sc @?= pay
         pure (pay, mempty, StatusOk, StatusDetails "")
-    clientMax n k = TestClient conf $ \c -> do
+    clientMax n k = TestClient (pure conf) $ \c -> do
       rm <- clientRegisterMethodNormal c "/foo"
       clientRequest c rm 1 pay mempty >>= k
       where
@@ -928,14 +938,15 @@ assertConsumeEq s v = P.lift . assertEqual s v =<< P.await
 clientFail :: Show a => a -> Assertion
 clientFail = assertFailure . ("Client error: " ++) . show
 
-data TestClient = TestClient ClientConfig (Client -> IO ())
+data TestClient = TestClient (IO ClientConfig) (Client -> IO ())
 
 runTestClient :: TestClient -> IO ()
-runTestClient (TestClient conf f) =
-  runManaged $ mgdGRPC >>= mgdClient conf >>= liftIO . f
+runTestClient (TestClient conf f) = do
+  cfg <- conf
+  runManaged $ mgdGRPC >>= mgdClient cfg >>= liftIO . f
 
 stdTestClient :: (Client -> IO ()) -> TestClient
-stdTestClient = TestClient stdClientConf
+stdTestClient = TestClient $ return stdClientConf
 
 stdClientConf :: ClientConfig
 stdClientConf = ClientConfig "localhost" 50051 [] Nothing Nothing
