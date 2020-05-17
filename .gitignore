@@ -11,3 +11,4 @@ result
 *~
 cabal.project.local
 dist-newstyle/
+tests/tmp/
