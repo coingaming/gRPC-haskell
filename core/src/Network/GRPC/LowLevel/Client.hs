@@ -40,8 +40,8 @@ data Client
 
 data ClientSSLKeyCertPair
   = ClientSSLKeyCertPair
-      { clientPrivateKey :: FilePath,
-        clientCert :: FilePath
+      { clientPrivateKey :: ByteString,
+        clientCert :: ByteString
       }
   deriving (Show)
 
@@ -50,9 +50,9 @@ data ClientSSLKeyCertPair
 -- root cert.
 data ClientSSLConfig
   = ClientSSLConfig
-      { -- | Path to the server root certificate. If 'Nothing', gRPC will attempt to
+      { -- | Server root certificate. If 'Nothing', gRPC will attempt to
         -- fall back to a default.
-        serverRootCert :: Maybe FilePath,
+        serverRootCert :: Maybe ByteString,
         -- | The client's private key and cert, if available.
         clientSSLKeyCertPair :: Maybe ClientSSLKeyCertPair,
         -- | Optional plugin for attaching additional metadata to each call.
@@ -96,20 +96,25 @@ createChannel :: ClientConfig -> C.GrpcChannelArgs -> IO C.Channel
 createChannel conf@ClientConfig {..} chanargs =
   case clientSSLConfig of
     Nothing -> C.grpcInsecureChannelCreate e chanargs C.reserved
-    Just (ClientSSLConfig rootCertPath Nothing plugin) ->
+    Just (ClientSSLConfig rootCert Nothing plugin) ->
       do
-        rootCert <- mapM B.readFile rootCertPath
         C.withChannelCredentials rootCert Nothing Nothing $ \creds -> do
           creds' <- addMetadataCreds creds plugin
           C.secureChannelCreate creds' e chanargs C.reserved
-    Just (ClientSSLConfig x (Just (ClientSSLKeyCertPair y z)) plugin) ->
-      do
-        rootCert <- mapM B.readFile x
-        privKey <- Just <$> B.readFile y
-        clientCert <- Just <$> B.readFile z
-        C.withChannelCredentials rootCert privKey clientCert $ \creds -> do
-          creds' <- addMetadataCreds creds plugin
-          C.secureChannelCreate creds' e chanargs C.reserved
+    Just
+      ( ClientSSLConfig
+          rootCert
+          (Just (ClientSSLKeyCertPair privKey clientCert))
+          plugin
+        ) ->
+        do
+          C.withChannelCredentials
+            rootCert
+            (Just privKey)
+            (Just clientCert)
+            $ \creds -> do
+              creds' <- addMetadataCreds creds plugin
+              C.secureChannelCreate creds' e chanargs C.reserved
   where
     (Endpoint e) = clientEndpoint conf
 
